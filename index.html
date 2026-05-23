@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="theme-color" content="#0f6e56"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <title>Złoty Zbieracz</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; background: #0a0a0a; color: #fff; height: 100dvh; display: flex; flex-direction: column; }
+
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px;
+      background: #111;
+      border-bottom: 1px solid #222;
+    }
+    header h1 { font-size: 17px; font-weight: 600; color: #f5c842; letter-spacing: 0.3px; }
+    #status-badge {
+      font-size: 11px; padding: 4px 10px; border-radius: 20px;
+      background: #1d9e75; color: #fff; font-weight: 500;
+    }
+    #status-badge.bad { background: #e24b4a; }
+    #status-badge.loading { background: #444; }
+
+    #map { flex: 1; width: 100%; }
+
+    #bottom-bar {
+      background: #111;
+      border-top: 1px solid #222;
+      padding: 10px 12px;
+      display: flex; gap: 8px; overflow-x: auto;
+      scrollbar-width: none;
+    }
+    #bottom-bar::-webkit-scrollbar { display: none; }
+
+    .poi-pill {
+      flex-shrink: 0;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 20px;
+      padding: 6px 12px;
+      font-size: 12px;
+      display: flex; align-items: center; gap: 6px;
+      white-space: nowrap;
+    }
+    .poi-pill .dot {
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    }
+    .poi-pill .name { color: #ccc; }
+    .poi-pill .val { color: #fff; font-weight: 600; }
+
+    #refresh-btn {
+      position: absolute;
+      bottom: 90px; right: 16px;
+      background: #1d9e75;
+      border: none; border-radius: 50%;
+      width: 48px; height: 48px;
+      font-size: 20px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.5);
+      z-index: 999;
+    }
+    #refresh-btn:active { transform: scale(0.93); }
+
+    #last-update {
+      position: absolute;
+      top: 60px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.7);
+      color: #aaa; font-size: 11px;
+      padding: 4px 10px; border-radius: 20px;
+      z-index: 999; pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>⚡ Złoty Zbieracz</h1>
+  <span id="status-badge" class="loading">Ładowanie…</span>
+</header>
+
+<div style="position:relative; flex:1; display:flex; flex-direction:column;">
+  <div id="map"></div>
+  <div id="last-update"></div>
+  <button id="refresh-btn" onclick="loadData()" title="Odśwież">↻</button>
+</div>
+
+<div id="bottom-bar"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const API_URL = window.location.hostname === 'localhost'
+  ? 'http://localhost:3000/api/lokalizacje'
+  : '/api/lokalizacje';
+
+const map = L.map('map', { zoomControl: false }).setView([54.39, 18.60], 12);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  maxZoom: 18, attribution: '© OpenStreetMap © CARTO'
+}).addTo(map);
+
+const POI_NAMES = {
+  plaza_brzezno: 'Plaża Brzeźno',
+  plaza_sopot:   'Plaża Sopot',
+  park_oliwski:  'Park Oliwski',
+  dlugi_targ:    'Długi Targ',
+  dworzec_gdansk:'Dworzec PKP',
+};
+
+let markers = [];
+
+function weightColor(w) {
+  if (w >= 0.7) return '#1d9e75';
+  if (w >= 0.4) return '#ef9f27';
+  return '#e24b4a';
+}
+
+function weightLabel(w) {
+  if (w >= 0.7) return 'wysoka';
+  if (w >= 0.4) return 'średnia';
+  return 'niska';
+}
+
+function renderMarkers(heatmapData, meta) {
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+
+  const bar = document.getElementById('bottom-bar');
+  bar.innerHTML = '';
+
+  heatmapData.forEach(([lat, lon, weight], i) => {
+    const id = Object.keys(POI_NAMES)[i];
+    const name = POI_NAMES[id] || `POI ${i+1}`;
+    const color = weightColor(weight);
+    const radius = 16 + weight * 24;
+
+    const circle = L.circleMarker([lat, lon], {
+      radius,
+      color,
+      fillColor: color,
+      fillOpacity: 0.75,
+      weight: 2,
+    }).addTo(map);
+
+    circle.bindPopup(`
+      <b>${name}</b><br>
+      Aktywność: <b>${weightLabel(weight)}</b><br>
+      Waga: ${(weight * 100).toFixed(0)}%<br>
+      Pogoda: ${meta.weatherDescription}
+    `);
+
+    markers.push(circle);
+
+    const pill = document.createElement('div');
+    pill.className = 'poi-pill';
+    pill.innerHTML = `
+      <span class="dot" style="background:${color}"></span>
+      <span class="name">${name}</span>
+      <span class="val">${(weight * 100).toFixed(0)}%</span>
+    `;
+    pill.onclick = () => { map.setView([lat, lon], 14); circle.openPopup(); };
+    bar.appendChild(pill);
+  });
+}
+
+async function loadData() {
+  const badge = document.getElementById('status-badge');
+  badge.textContent = 'Ładowanie…';
+  badge.className = 'loading';
+
+  try {
+    const res = await fetch(API_URL);
+    if (!res.ok) throw new Error('Błąd serwera');
+    const data = await res.json();
+
+    renderMarkers(data.heatmapData, data.meta);
+
+    badge.textContent = data.meta.isBadWeather ? '☁️ Zła pogoda' : '☀️ Ładna pogoda';
+    badge.className = data.meta.isBadWeather ? 'bad' : '';
+
+    const t = new Date(data.meta.generatedAt);
+    document.getElementById('last-update').textContent =
+      `Aktualizacja: ${t.toLocaleTimeString('pl-PL', {hour:'2-digit',minute:'2-digit'})}`;
+
+  } catch (err) {
+    badge.textContent = '⚠️ Błąd połączenia';
+    badge.className = 'bad';
+    console.error(err);
+  }
+}
+
+loadData();
+setInterval(loadData, 5 * 60 * 1000);
+</script>
+</body>
+</html>
